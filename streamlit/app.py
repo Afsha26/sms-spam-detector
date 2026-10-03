@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import altair as alt
 
 from sklearn.metrics import (
     accuracy_score,
@@ -21,14 +22,109 @@ st.set_page_config(
     layout="centered"
 )
 
+# =========================================================
+# 1.1 GLOBAL UI STYLING & ANIMATIONS
+# =========================================================
+
+st.markdown("""
+<style>
+    /* CSS Variables for Uniform Theme */
+    :root {
+        --primary-color: #4f46e5;
+        --secondary-color: #3b82f6;
+        --background-color: #ffffff;
+        --surface-color: #f8fafc;
+        --text-color: #1e293b;
+        --muted-text-color: #64748b;
+        --border-color: #e2e8f0;
+        --success-color: #10b981;
+        --warning-color: #f59e0b;
+        --error-color: #ef4444;
+    }
+
+    /* Subtle Animations & Hover Effects */
+    @media (prefers-reduced-motion: no-preference) {
+        /* Container fade-in and hover lift */
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            animation: fadeSlideUp 0.6s ease-out both;
+            transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        
+        [data-testid="stVerticalBlockBorderWrapper"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.06) !important;
+        }
+
+        /* Staggered animation for containers */
+        [data-testid="stVerticalBlockBorderWrapper"]:nth-child(1) { animation-delay: 0.1s; }
+        [data-testid="stVerticalBlockBorderWrapper"]:nth-child(2) { animation-delay: 0.2s; }
+        [data-testid="stVerticalBlockBorderWrapper"]:nth-child(3) { animation-delay: 0.3s; }
+        [data-testid="stVerticalBlockBorderWrapper"]:nth-child(4) { animation-delay: 0.4s; }
+
+        /* Button hover animation */
+        .stButton > button {
+            transition: all 0.2s ease !important;
+        }
+        .stButton > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1) !important;
+        }
+
+        /* Metric hover */
+        [data-testid="stMetric"] {
+            transition: transform 0.2s ease;
+        }
+        [data-testid="stMetric"]:hover {
+            transform: scale(1.02);
+        }
+
+        @keyframes fadeSlideUp {
+            from {
+                opacity: 0;
+                transform: translateY(15px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    }
+
+    /* Refined container styling */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 12px !important;
+        padding: 8px !important;
+    }
+
+    /* Primary Button Color Override */
+    .stButton > button[kind="primary"] {
+        background-color: var(--primary-color) !important;
+        border-color: var(--primary-color) !important;
+        color: white !important;
+    }
+    
+    .stButton > button[kind="primary"]:hover {
+        background-color: var(--secondary-color) !important;
+        border-color: var(--secondary-color) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+
+from pathlib import Path
 
 # =========================================================
 # 2. FILE PATHS
 # =========================================================
 
-DATASET_PATH = "../ml/SMSSpamCollection"
-VECTORIZER_PATH = "../ml/vectorizer.pkl"
-MODEL_PATH = "../ml/spam_model.pkl"
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = BASE_DIR.parent
+ML_DIR = PROJECT_DIR / "ml"
+
+DATASET_PATH = ML_DIR / "SMSSpamCollection"
+VECTORIZER_PATH = ML_DIR / "vectorizer.pkl"
+MODEL_PATH = ML_DIR / "spam_model.pkl"
 
 
 # =========================================================
@@ -605,115 +701,107 @@ with col4:
 
 with st.expander("View Confusion Matrix"):
 
-    cm_df = pd.DataFrame(
-        cm,
-        index=[
-            "Actual Ham",
-            "Actual Spam"
-        ],
-        columns=[
-            "Predicted Ham",
-            "Predicted Spam"
-        ]
+    # Convert to long format for Altair heatmap
+    cm_df = pd.DataFrame(cm, index=["Ham", "Spam"], columns=["Ham", "Spam"])
+    cm_df = cm_df.reset_index().melt(id_vars="index", var_name="Predicted", value_name="Count")
+    cm_df.rename(columns={"index": "Actual"}, inplace=True)
+    
+    # Create Altair heatmap
+    base = alt.Chart(cm_df).encode(
+        x=alt.X('Predicted:O', title='Predicted Label', axis=alt.Axis(labelAngle=0)),
+        y=alt.Y('Actual:O', title='Actual (True) Label', sort='descending')
     )
+    
+    # Heatmap rects with primary-colored scale (blues)
+    heatmap = base.mark_rect().encode(
+        color=alt.Color('Count:Q', scale=alt.Scale(scheme='blues'), legend=None)
+    )
+    
+    # Text labels inside cells
+    text = base.mark_text(baseline='middle', fontSize=14, fontWeight='bold').encode(
+        text='Count:Q',
+        color=alt.condition(
+            alt.datum.Count > cm_df['Count'].max() / 2,
+            alt.value('white'),
+            alt.value('black')
+        )
+    )
+    
+    chart = (heatmap + text).properties(
+        height=300,
+        title='Confusion Matrix'
+    ).configure_axis(
+        labelFontSize=13,
+        titleFontSize=14,
+        titlePadding=10
+    ).configure_title(
+        fontSize=18,
+        anchor='middle',
+        offset=15
+    )
+    
+    st.altair_chart(chart, use_container_width=True)
 
-    st.dataframe(
-        cm_df,
-        use_container_width=True
-    )
+    # Metrics Summary
+    total = cm.sum()
+    correct = cm.trace()
+    incorrect = total - correct
+    
+    st.markdown("##### Prediction Summary")
+    col_tot, col_cor, col_inc, col_acc = st.columns(4)
+    col_tot.metric("Total", f"{total:,}")
+    col_cor.metric("Correct", f"{correct:,}")
+    col_inc.metric("Incorrect", f"{incorrect:,}")
+    col_acc.metric("Accuracy", f"{(correct/total)*100:.1f}%")
 
 
 # =========================================================
 # 11. SMS ANALYZER
 # =========================================================
 
-st.html("""
-<div class="analyzer-card">
+st.markdown("<br>", unsafe_allow_html=True)
 
-    <div class="analyzer-title">
-        🔍 Analyze an SMS Message
-    </div>
+with st.container(border=True):
+    st.markdown("### 🔍 Analyze an SMS Message")
+    st.markdown("Enter a message below and let the machine learning model determine whether it is spam or legitimate.")
+    
+    user_input = st.text_area(
+        "SMS Message",
+        placeholder=(
+            "Example:\n"
+            "Congratulations! You have won a prize. "
+            "Click the link to claim it."
+        ),
+        height=140,
+        label_visibility="collapsed"
+    )
 
-    <div class="analyzer-description">
-        Enter a message below and let the machine learning
-        model determine whether it is spam or legitimate.
-    </div>
-
-    <div class="analyzer-badge">
-        NLP • Text Classification
-    </div>
-
-</div>
-""")
-
-
-user_input = st.text_area(
-    "SMS Message",
-
-    placeholder=(
-        "Example:\n"
-        "Congratulations! You have won a prize. "
-        "Click the link to claim it."
-    ),
-
-    height=140,
-
-    label_visibility="collapsed"
-)
-
+    analyze_clicked = st.button(
+        "🔍 Analyze Message",
+        use_container_width=True,
+        type="primary"
+    )
 
 # =========================================================
 # 12. SUSPICIOUS KEYWORDS
 # =========================================================
 
 security_triggers = [
-
-    "free",
-    "winner",
-    "won",
-    "prize",
-    "urgent",
-    "claim",
-    "reward",
-    "cash",
-    "offer",
-    "click",
-    "verify",
-    "account",
-    "password",
-    "bank",
-    "credit",
-    "limited",
-    "congratulations",
-    "http://",
-    "https://",
-    "www."
+    "free", "winner", "won", "prize", "urgent", "claim",
+    "reward", "cash", "offer", "click", "verify", "account",
+    "password", "bank", "credit", "limited", "congratulations",
+    "http://", "https://", "www."
 ]
 
-
 def find_suspicious_keywords(message):
-
     message_lower = message.lower()
-
-    found_keywords = []
-
-    for keyword in security_triggers:
-
-        if keyword in message_lower:
-
-            found_keywords.append(keyword)
-
-    return found_keywords
-
+    return [kw for kw in security_triggers if kw in message_lower]
 
 # =========================================================
 # 13. MESSAGE ANALYSIS
 # =========================================================
 
-if st.button(
-    "🔍 Analyze Message",
-    use_container_width=True
-):
+if analyze_clicked:
 
     if not user_input.strip():
 
@@ -765,136 +853,83 @@ if st.button(
 
 
         # -------------------------------------------------
-        # RESULT
+        # RESULT & VISUALIZATION
         # -------------------------------------------------
-
+        
+        st.markdown("---")
+        
         if prediction == 1:
-
-            st.html("""
-            <div class="result-card">
-
-                <div class="result-title">
-                    🚨 Spam Message
-                </div>
-
-                <div class="result-subtitle">
-                    The model classified this message as
-                    likely spam.
-                </div>
-
-            </div>
-            """)
-
+            st.error("### 🚨 Spam Message\nThe model classified this message as **Spam**.")
         else:
+            st.success("### ✅ Legitimate Message\nThe model classified this message as **Ham (Legitimate)**.")
 
-            st.html("""
-            <div class="result-card">
-
-                <div class="result-title">
-                    ✅ Ham / Legitimate Message
-                </div>
-
-                <div class="result-subtitle">
-                    The model classified this message as
-                    likely legitimate.
-                </div>
-
-            </div>
-            """)
-
+        # Display Probabilities
+        st.markdown("#### Confidence Scores")
+        col_spam, col_ham = st.columns(2)
+        
+        with col_spam:
+            st.metric("Spam Probability", f"{spam_probability * 100:.2f}%")
+            st.progress(float(spam_probability))
+            
+        with col_ham:
+            st.metric("Ham Probability", f"{ham_probability * 100:.2f}%")
+            st.progress(float(ham_probability))
 
         # -------------------------------------------------
-        # PROBABILITY
-        # -------------------------------------------------
-
-        st.write("### Spam Probability")
-
-        st.progress(
-            float(spam_probability)
-        )
-
-        st.write(
-            f"**{spam_probability * 100:.2f}%**"
-        )
-
-
-        # -------------------------------------------------
-        # HAM / SPAM PROBABILITIES
-        # -------------------------------------------------
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.metric(
-                "Ham Probability",
-                f"{ham_probability * 100:.2f}%"
-            )
-
-        with col2:
-
-            st.metric(
-                "Spam Probability",
-                f"{spam_probability * 100:.2f}%"
-            )
-
-
-        # -------------------------------------------------
-        # SUSPICIOUS INDICATORS
+        # SUSPICIOUS KEYWORDS DISPLAY
         # -------------------------------------------------
 
         if suspicious_keywords:
+            st.warning(f"⚠️ **Suspicious Keywords Detected:** {', '.join(suspicious_keywords)}")
+        elif prediction == 1:
+            st.info("ℹ️ No explicitly listed suspicious keywords found, but context suggests spam.")
 
-            st.warning(
-                "⚠️ Suspicious indicators detected:"
-            )
 
-            st.write(
-                ", ".join(
-                    suspicious_keywords
-                )
-            )
 
-        else:
-
-            st.info(
-                "No predefined suspicious indicators detected."
-            )
 
 
 # =========================================================
 # 14. SAMPLE DATASET
 # =========================================================
 
-st.html("""
-<div class="section-card">
+with st.container(border=True):
+    st.markdown("### 📋 Sample Dataset")
+    st.markdown("Preview of messages from the dataset used by the model.")
 
-    <div class="section-title">
-        📋 Sample Dataset
-    </div>
-
-    <div class="section-description">
-        Preview of messages from the dataset used by the model.
-    </div>
-
-</div>
-""")
-
-
-with st.expander("View Sample Messages"):
+with st.expander(f"View Sample Messages ({len(data.head(10))} sample messages)"):
 
     sample_data = data.head(10).copy()
 
-    sample_data["label"] = sample_data["label"].map({
-        0: "Ham",
-        1: "Spam"
-    })
-
-    st.dataframe(
-        sample_data,
-        use_container_width=True,
-        hide_index=True
-    )
+    # Create a responsive 2-column grid for the cards
+    cols = st.columns(2)
+    
+    for i, (_, row) in enumerate(sample_data.iterrows()):
+        # Map label: 0 -> Ham, 1 -> Spam
+        label_text = "Spam" if row["label"] == 1 else "Ham"
+        msg_text = row["message"]
+        
+        # Apply theme-aware colors for the status badge
+        if label_text == "Spam":
+            badge_color = "var(--error-color)"
+            badge_bg = "rgba(239, 68, 68, 0.12)"
+        else:
+            badge_color = "var(--success-color)"
+            badge_bg = "rgba(16, 185, 129, 0.12)"
+            
+        col = cols[i % 2]
+        
+        with col.container(border=True):
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 13px; color: var(--muted-text-color); font-weight: 600; text-transform: uppercase;">Message #{i + 1}</span>
+                <span style="background-color: {badge_bg}; color: {badge_color}; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 700; border: 1px solid {badge_color}40;">
+                    {label_text.upper()}
+                </span>
+            </div>
+            <div style="font-size: 15px; color: var(--text-color); line-height: 1.6; word-wrap: break-word; padding-bottom: 4px;">
+                "{msg_text}"
+            </div>
+            """, unsafe_allow_html=True)
 
 
 # =========================================================
